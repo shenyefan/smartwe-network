@@ -1,0 +1,57 @@
+name: Release
+
+# 每次推送到主分支：测试、编译 Windows 发布版，并发布一个 Release。
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Read version
+        id: meta
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          echo "tag=v${version}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "smartwe-network-${{ steps.meta.outputs.version }}-windows-x64"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/smartwe-network.exe $name/
+          Copy-Item README.md $name/
+          Compress-Archive -Path $name/* -DestinationPath "$name.zip"
+          "ASSET=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ env.ASSET }}
